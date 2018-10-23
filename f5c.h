@@ -8,7 +8,7 @@
 #include "fast5lite.h"
 #include "nanopolish_read_db.h"
 
-#define m_min_mapping_quality 30
+//#define m_min_mapping_quality 30
 #define KMER_SIZE 6 //hard coded for now; todo : change to dynamic
 #define NUM_KMER 4096
 #define NUM_KMER_METH 15625
@@ -31,6 +31,7 @@
 #define FAILED_CALIBRATION 0x001 //if the calibration failed
 #define FAILED_ALIGNMENT 0x002
 #define FAILED_QUALITY_CHK  0x004
+//#define FAILED_FAST5  0x008
 
 
 #define WORK_STEAL 1
@@ -39,8 +40,12 @@
 #define IO_PROC_INTERLEAVE 1
 #define SECTIONAL_BENCHMARK 1   
 
-//#define ALIGN_2D_ARRAY 1 //for CPU whether to use a 1D array or a 2D array
+#define ALIGN_2D_ARRAY 1 //for CPU whether to use a 1D array or a 2D array
 
+#define CACHED_LOG 1 //if the log values of scalings and the model k-mers are cached
+//#define LOAD_SD_MEANSSTDV 1 //if the sd_mean and the sd_stdv is yo be loaded
+
+#define ESL_LOG_SUM 1 // the fast log sum for HMM
 
 
 typedef struct {
@@ -75,9 +80,17 @@ typedef struct {
     //char kmer[KMER_SIZE + 1]; //KMER_SIZE+null character //can get rid of this
     float level_mean;
     float level_stdv;
-    float sd_mean;
-    float sd_stdv;
+
+#ifdef CACHED_LOG
+    //calculated for efficiency
+    float level_log_stdv;
+#endif
+
+#ifdef LOAD_SD_MEANSSTDV
+    //float sd_mean;
+    //float sd_stdv;
     //float weight;
+#endif
 } model_t;
 
 //taken from nanopolish
@@ -91,7 +104,9 @@ typedef struct {
     //float var_sd;
 
     // derived parameters that are cached for efficiency
-    //float log_var;
+#ifdef CACHED_LOG    
+    float log_var;
+#endif
     //float scaled_var;
     //float log_scaled_var;
 
@@ -134,6 +149,38 @@ typedef struct {
     char hmm_state;
 } event_alignment_t;
 
+//from nanopolish
+struct ScoredSite
+{
+    //toto : clean up unused
+    ScoredSite() 
+    { 
+        ll_unmethylated[0] = 0;
+        ll_unmethylated[1] = 0;
+        ll_methylated[0] = 0;
+        ll_methylated[1] = 0;
+        strands_scored = 0;
+    }
+
+    std::string chromosome;
+    int start_position;
+    int end_position;
+    int n_cpg;
+    std::string sequence;
+
+    // scores per strand
+    double ll_unmethylated[2];
+    double ll_methylated[2];
+    int strands_scored;
+
+    //
+    static bool sort_by_position(const ScoredSite& a, const ScoredSite& b) { return a.start_position < b.start_position; }
+
+};
+
+
+
+
 typedef struct {
     // region string
     //char* region;
@@ -172,8 +219,10 @@ typedef struct {
     index_pair_t** base_to_event_map;
 
     int32_t* read_stat_flag;
-    
 
+    //extreme ugly hack till converted to C
+    std::map<int, ScoredSite> **site_score_map;
+    
 } db_t;
 
 typedef struct {
@@ -198,7 +247,21 @@ typedef struct {
 
     //realtime0
     double realtime0;
+    double event_time;
     double align_time;
+    double est_scale_time;
+    double meth_time;
+    
+    double align_kernel_time;
+    double align_pre_kernel_time;
+    double align_core_kernel_time;
+    double align_post_kernel_time;
+    double align_cuda_malloc;
+    double align_cuda_memcpy;
+    double align_cuda_postprocess;
+    double align_cuda_preprocess;
+    double align_cuda_total_kernel;
+
 
 } core_t;
 

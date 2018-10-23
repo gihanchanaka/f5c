@@ -39,7 +39,7 @@ float profile_hmm_score(const char *m_seq,const char *m_rc_seq, event_t* event, 
     int8_t event_stride,
     uint8_t rc,double events_per_base,uint32_t hmm_flags 
 );
-void calculate_methylation_for_read(bam_hdr_t* m_hdr, char* ref, bam1_t* record, int32_t read_length, event_t* event, index_pair_t* base_to_event_map,
+void calculate_methylation_for_read(std::map<int, ScoredSite>* site_score_map, char* ref, bam1_t* record, int32_t read_length, event_t* event, index_pair_t* base_to_event_map,
 scalings_t scaling, model_t* cpgmodel,double events_per_base);
 
 #ifdef HAVE_CUDA
@@ -86,5 +86,6 @@ static inline void print_size(const char* name, uint64_t bytes)
     else
         fprintf(stderr, "%s : %.1f %s\n", name, count, suffixes[s]);
 }
+
 
 #endif

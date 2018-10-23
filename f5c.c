@@ -59,7 +59,21 @@ core_t* init_core(const char* bamfilename, const char* fastafile,
     //realtime0
     core->realtime0=realtime0;
 
+    core->event_time=0;
     core->align_time=0;
+    core->est_scale_time=0;
+    core->meth_time=0;
+
+#ifdef HAVE_CUDA
+    core->align_kernel_time=0;
+    core->align_pre_kernel_time=0;
+    core->align_core_kernel_time=0;
+    core->align_post_kernel_time=0;
+    core->align_cuda_malloc=0;
+    core->align_cuda_memcpy=0;
+    core->align_cuda_postprocess=0;
+    core->align_cuda_preprocess=0;
+#endif
 
     return core;
 }
@@ -134,6 +148,14 @@ db_t* init_db(core_t* core) {
     db->read_stat_flag = (int32_t *)malloc(sizeof(int32_t) * db->capacity_bam_rec);
     MALLOC_CHK(db->read_stat_flag);
 
+    db->site_score_map = (std::map<int, ScoredSite> **)malloc(sizeof(std::map<int, ScoredSite> *) * db->capacity_bam_rec);
+    MALLOC_CHK(db->site_score_map);
+
+    for (i = 0; i < db->capacity_bam_rec; ++i) {
+        db->site_score_map[i] = new std::map<int, ScoredSite>;
+        NULL_CHK(db->site_score_map[i]);
+    }
+
     return db;
 }
 
@@ -144,7 +166,8 @@ int32_t load_db(core_t* core, db_t* db) {
     db->n_bam_rec = 0;
     int32_t i = 0;
     while (db->n_bam_rec < db->capacity_bam_rec) {
-        record = db->bam_rec[db->n_bam_rec];
+        i=db->n_bam_rec;
+        record = db->bam_rec[i];
         result = sam_itr_next(core->m_bam_fh, core->itr, record);
 
         if (result < 0) {
@@ -155,7 +178,54 @@ int32_t load_db(core_t* core, db_t* db) {
                     core->opt
                         .min_mapq) { // remove secondraies? //need to use the user parameter
                 // printf("%s\t%d\n",bam_get_qname(db->bam_rec[db->n_bam_rec]),result);
-                db->n_bam_rec++;
+                
+                if(!(core->opt.flag & F5C_SECONDARY_YES)){
+                    if((record->core.flag & BAM_FSECONDARY)){
+                        continue;
+                    }
+                }
+                std::string qname = bam_get_qname(record);
+
+                char* fast5_path =
+                    (char*)malloc(core->readbb->get_signal_path(qname).size() +
+                                10); // is +10 needed? do errorcheck
+                strcpy(fast5_path, core->readbb->get_signal_path(qname).c_str());
+
+                //fprintf(stderr,"readname : %s\n",qname.c_str());
+
+                hid_t hdf5_file = fast5_open(fast5_path);
+                if (hdf5_file >= 0) {
+                    db->f5[i] = (fast5_t*)calloc(1, sizeof(fast5_t));
+                    MALLOC_CHK(db->f5[i]);
+                    fast5_read(hdf5_file, db->f5[i]); // todo : errorhandle
+                    fast5_close(hdf5_file);
+
+                    if (core->opt.flag & F5C_PRINT_RAW) {
+                        printf(">%s\tPATH:%s\tLN:%llu\n", qname.c_str(), fast5_path,
+                            db->f5[i]->nsample);
+                        uint32_t j = 0;
+                        for (j = 0; j < db->f5[i]->nsample; j++) {
+                            printf("%d\t", (int)db->f5[i]->rawptr[j]);
+                        }
+                        printf("\n");
+                    }
+                    
+                    db->n_bam_rec++;
+                
+                } else {
+                    if (core->opt.flag & F5C_SKIP_UNREADABLE) {
+                        WARNING("Fast5 file (%s for for read %s) is unreadable and will be skipped",
+                                fast5_path,qname.c_str());
+                    } else {
+                        ERROR("Fast5 file (%s) could not be opened for read %s", fast5_path, qname.c_str());
+                        exit(EXIT_FAILURE);
+                    }
+                }
+
+                
+
+                free(fast5_path);                
+                
             }
         }
     }
@@ -183,40 +253,6 @@ int32_t load_db(core_t* core, db_t* db) {
 
         // Get the read type from the fast5 file
         std::string qname = bam_get_qname(db->bam_rec[i]);
-        char* fast5_path =
-            (char*)malloc(core->readbb->get_signal_path(qname).size() +
-                          10); // is +10 needed? do errorcheck
-        strcpy(fast5_path, core->readbb->get_signal_path(qname).c_str());
-
-        //fprintf(stderr,"readname : %s\n",qname.c_str());
-
-        hid_t hdf5_file = fast5_open(fast5_path);
-        if (hdf5_file >= 0) {
-            db->f5[i] = (fast5_t*)calloc(1, sizeof(fast5_t));
-            MALLOC_CHK(db->f5[i]);
-            fast5_read(hdf5_file, db->f5[i]); // todo : errorhandle
-            fast5_close(hdf5_file);
-        } else {
-            if (core->opt.flag & F5C_SKIP_UNREADABLE) {
-                WARNING("Fast5 file is unreadable and will be skipped: %s",
-                        fast5_path);
-            } else {
-                ERROR("Fast5 file could not be opened: %s", fast5_path);
-                exit(EXIT_FAILURE);
-            }
-        }
-
-        if (core->opt.flag & F5C_PRINT_RAW) {
-            printf(">%s\tPATH:%s\tLN:%llu\n", qname.c_str(), fast5_path,
-                   db->f5[i]->nsample);
-            uint32_t j = 0;
-            for (j = 0; j < db->f5[i]->nsample; j++) {
-                printf("%d\t", (int)db->f5[i]->rawptr[j]);
-            }
-            printf("\n");
-        }
-
-        free(fast5_path);
 
         //get the read in ascci
         db->read[i] =
@@ -483,7 +519,7 @@ void align_db(core_t* core, db_t* db) {
 #endif
 
     if (core->opt.flag & F5C_DISABLE_CUDA) {
-        fprintf(stderr, "cpu\n");
+        //fprintf(stderr, "cpu\n");
         if (core->opt.num_thread == 1) {
             int i;
             for (i = 0; i < db->n_bam_rec; i++) {
@@ -528,6 +564,27 @@ void align_db(core_t* core, db_t* db) {
         }
     }
 }
+
+
+void meth_single(core_t* core, db_t* db, int32_t i){
+    if(!db->read_stat_flag[i]){
+        calculate_methylation_for_read(db->site_score_map[i], db->fasta_cache[i], db->bam_rec[i], db->read_len[i], db->et[i].event, db->base_to_event_map[i],
+db->scalings[i], core->cpgmodel,db->events_per_base[i]);
+    }
+}
+
+void meth_db(core_t* core, db_t* db) {
+    if (core->opt.num_thread == 1) {
+        int i;
+        for (i = 0; i < db->n_bam_rec; i++) {
+            meth_single(core, db, i);
+        }
+    } 
+    else {
+        pthread_db(core, db, meth_single);
+    }
+}
+    
 
 
 void process_single(core_t* core, db_t* db,int32_t i) {
@@ -609,7 +666,7 @@ void process_single(core_t* core, db_t* db,int32_t i) {
         return;
     }
 
-    calculate_methylation_for_read(core->m_hdr, db->fasta_cache[i], db->bam_rec[i], db->read_len[i], db->et[i].event, db->base_to_event_map[i],
+    calculate_methylation_for_read(db->site_score_map[i], db->fasta_cache[i], db->bam_rec[i], db->read_len[i], db->et[i].event, db->base_to_event_map[i],
 db->scalings[i], core->cpgmodel,db->events_per_base[i]);
     
 }
@@ -620,8 +677,11 @@ void process_db(core_t* core, db_t* db) {
 
     double realtime0=core->realtime0;
     int32_t i;
-
+    
+    double event_start = realtime();
     event_db(core,db);
+    double event_end = realtime();
+    core->event_time += (event_end-event_start);
 
     fprintf(stderr, "[%s::%.3f*%.2f] Events computed\n", __func__,
             realtime() - realtime0, cputime() / (realtime() - realtime0));
@@ -641,6 +701,7 @@ void process_db(core_t* core, db_t* db) {
     fprintf(stderr, "[%s::%.3f*%.2f] Banded alignment done\n", __func__,
             realtime() - realtime0, cputime() / (realtime() - realtime0));
 
+    double est_scale_start = realtime();
     for (i = 0; i < db->n_bam_rec; i++) {
         db->event_alignment[i] = NULL;
         db->n_event_alignment[i] = 0;
@@ -710,9 +771,21 @@ void process_db(core_t* core, db_t* db) {
             continue;
         }
 
-        calculate_methylation_for_read(core->m_hdr, db->fasta_cache[i], db->bam_rec[i], db->read_len[i], db->et[i].event, db->base_to_event_map[i],
-db->scalings[i], core->cpgmodel,db->events_per_base[i]);
     }
+    double est_scale_end = realtime();
+    core->est_scale_time += (est_scale_end-est_scale_start);
+
+    fprintf(stderr, "[%s::%.3f*%.2f] Scaling calibration done\n", __func__,
+            realtime() - realtime0, cputime() / (realtime() - realtime0));
+
+    double meth_start = realtime();
+    meth_db(core,db);
+    double meth_end = realtime();
+    core->meth_time += (meth_end-meth_start);
+
+    fprintf(stderr, "[%s::%.3f*%.2f] Methylation calling done\n", __func__,
+            realtime() - realtime0, cputime() / (realtime() - realtime0));   
+
 
 #else
     if (core->opt.num_thread == 1) {
@@ -780,6 +853,59 @@ void output_db(core_t* core, db_t* db) {
                    db->scalings[i].var);
         }
     }
+
+    int32_t i = 0;
+    for (i = 0; i < db->n_bam_rec; i++){
+        if(!db->read_stat_flag[i]){
+            char* qname = bam_get_qname(db->bam_rec[i]);
+            char* contig = core->m_hdr->target_name[db->bam_rec[i]->core.tid];
+            std::map<int, ScoredSite> *site_score_map = db->site_score_map[i];
+
+            // write all sites for this read
+            for(auto iter = site_score_map->begin(); iter != site_score_map->end(); ++iter) {
+
+                const ScoredSite& ss = iter->second;
+                double sum_ll_m = ss.ll_methylated[0]; //+ ss.ll_methylated[1];
+                double sum_ll_u = ss.ll_unmethylated[0]; //+ ss.ll_unmethylated[1];
+                double diff = sum_ll_m - sum_ll_u;
+
+                // fprintf(stderr, "%s\t%d\t%d\t", ss.chromosome.c_str(), ss.start_position, ss.end_position);
+                // fprintf(stderr, "%s\t%.2lf\t", qname, diff);
+                // fprintf(stderr, "%.2lf\t%.2lf\t", sum_ll_m, sum_ll_u);
+                // fprintf(stderr, "%d\t%d\t%s\n", ss.strands_scored, ss.n_cpg, ss.sequence.c_str());
+
+                printf("%s\t%d\t%d\t", contig, ss.start_position, ss.end_position);
+                printf("%s\t%.2lf\t", qname, diff);
+                printf("%.2lf\t%.2lf\t", sum_ll_m, sum_ll_u);
+                printf("%d\t%d\t%s\n", ss.strands_scored, ss.n_cpg, ss.sequence.c_str());
+
+            }
+        }
+    }
+    // 
+
+    // #ifdef METH_DEBUG
+    // // write all sites for this read
+    // for(auto iter = site_score_map.begin(); iter != site_score_map.end(); ++iter) {
+
+    //     const ScoredSite& ss = iter->second;
+    //     double sum_ll_m = ss.ll_methylated[0]; //+ ss.ll_methylated[1];
+    //     double sum_ll_u = ss.ll_unmethylated[0]; //+ ss.ll_unmethylated[1];
+    //     double diff = sum_ll_m - sum_ll_u;
+
+    //     // fprintf(stderr, "%s\t%d\t%d\t", ss.chromosome.c_str(), ss.start_position, ss.end_position);
+    //     // fprintf(stderr, "%s\t%.2lf\t", qname, diff);
+    //     // fprintf(stderr, "%.2lf\t%.2lf\t", sum_ll_m, sum_ll_u);
+    //     // fprintf(stderr, "%d\t%d\t%s\n", ss.strands_scored, ss.n_cpg, ss.sequence.c_str());
+
+    //     printf("%s\t%d\t%d\t", ss.chromosome.c_str(), ss.start_position, ss.end_position);
+    //     printf("%s\t%.2lf\t", qname, diff);
+    //     printf("%.2lf\t%.2lf\t", sum_ll_m, sum_ll_u);
+    //     printf("%d\t%d\t%s\n", ss.strands_scored, ss.n_cpg, ss.sequence.c_str());
+
+    // }
+    // #endif
+
 }
 
 void free_db_tmp(db_t* db) {
@@ -794,6 +920,8 @@ void free_db_tmp(db_t* db) {
         free(db->et[i].event);
         free(db->event_align_pairs[i]);
         free(db->base_to_event_map[i]);
+        delete db->site_score_map[i];
+        db->site_score_map[i] = new std::map<int, ScoredSite>;
     }
 }
 
@@ -816,7 +944,10 @@ void free_db(db_t* db) {
     free(db->events_per_base);
     free(db->base_to_event_map);
     free(db->read_stat_flag);
-
+    for (i = 0; i < db->capacity_bam_rec; ++i) {
+        delete db->site_score_map[i];
+    }   
+    free(db->site_score_map);
     free(db);
 }
 
@@ -828,5 +959,7 @@ void init_opt(opt_t* opt) {
 #ifndef HAVE_CUDA
     opt->flag |= F5C_DISABLE_CUDA;
 #endif
-    opt->cuda_block_size=64;    
+    opt->cuda_block_size=64;   
+    opt->flag |= F5C_SKIP_UNREADABLE;
+    opt->flag |= F5C_SECONDARY_YES;
 }

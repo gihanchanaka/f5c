@@ -9,7 +9,7 @@
 
 #define METH_DEBUG 1
 
-//contains extracted and modified code from nanopolish
+//following Code is adapted from Nanopolish 
 
 typedef std::vector<AlignedPair> AlignedSegment;
 
@@ -121,7 +121,7 @@ std::vector<AlignedPair> get_event_alignment_record(const bam1_t* record,int32_t
 {
 
     uint8_t rc = bam_is_rev(record);
-    int8_t stride;
+    //int8_t stride;
 
     // copy read base-to-reference alignment
     std::vector<AlignedSegment> alignments = get_aligned_segments(record,1);
@@ -158,15 +158,16 @@ std::vector<AlignedPair> get_event_alignment_record(const bam1_t* record,int32_t
     //this->strand = strand_idx;
 
     if(!aligned_events.empty()) {
-        stride = aligned_events.front().read_pos < aligned_events.back().read_pos ? 1 : -1;
+        //stride = aligned_events.front().read_pos < aligned_events.back().read_pos ? 1 : -1;
 
         // check for a degenerate alignment and discard the events if so
         if(aligned_events.front().read_pos == aligned_events.back().read_pos) {
             aligned_events.clear();
         }
-    } else {
-        stride = 1;
-    }
+    } 
+    // else {
+    //     stride = 1;
+    // }
 
     return aligned_events;
 }
@@ -280,7 +281,7 @@ std::string disambiguate(const std::string& str) {
     size_t i = 0;
     while (i < out.length()) {
         size_t stride = 1;
-        bool is_recognition_site = false;
+        //bool is_recognition_site = false;
 
         assert(isValid(out[i]));
         out[i] = getPossibleSymbols(out[i])[0];
@@ -457,44 +458,44 @@ bool find_by_ref_bounds(const std::vector<AlignedPair>& pairs, int ref_start,
 
 
 
-struct ScoredSite
-{
-    ScoredSite() 
-    { 
-        ll_unmethylated[0] = 0;
-        ll_unmethylated[1] = 0;
-        ll_methylated[0] = 0;
-        ll_methylated[1] = 0;
-        strands_scored = 0;
-    }
+// struct ScoredSite
+// {
+//     ScoredSite() 
+//     { 
+//         ll_unmethylated[0] = 0;
+//         ll_unmethylated[1] = 0;
+//         ll_methylated[0] = 0;
+//         ll_methylated[1] = 0;
+//         strands_scored = 0;
+//     }
 
-    std::string chromosome;
-    int start_position;
-    int end_position;
-    int n_cpg;
-    std::string sequence;
+//     std::string chromosome;
+//     int start_position;
+//     int end_position;
+//     int n_cpg;
+//     std::string sequence;
 
-    // scores per strand
-    double ll_unmethylated[2];
-    double ll_methylated[2];
-    int strands_scored;
+//     // scores per strand
+//     double ll_unmethylated[2];
+//     double ll_methylated[2];
+//     int strands_scored;
 
-    //
-    static bool sort_by_position(const ScoredSite& a, const ScoredSite& b) { return a.start_position < b.start_position; }
+//     //
+//     static bool sort_by_position(const ScoredSite& a, const ScoredSite& b) { return a.start_position < b.start_position; }
 
-};
+// };
 
 
 
 // Test CpG sites in this read for methylation
-void calculate_methylation_for_read(bam_hdr_t* m_hdr, char* ref, bam1_t* record, int32_t read_length, event_t* event, index_pair_t* base_to_event_map,
+void calculate_methylation_for_read(std::map<int, ScoredSite>* site_score_map, char* ref, bam1_t* record, int32_t read_length, event_t* event, index_pair_t* base_to_event_map,
 scalings_t scaling, model_t* cpgmodel,double events_per_base) {
     // Load a squiggle read for the mapped read
     // std::string read_name = bam_get_qname(record);
     // SquiggleRead sr(read_name, read_db);
 
     // An output map from reference positions to scored CpG sites
-    std::map<int, ScoredSite> site_score_map;
+    //std::map<int, ScoredSite> site_score_map;
 
     //todo : do this
     // if(!sr.has_events_for_strand(strand_idx)) {
@@ -524,7 +525,7 @@ scalings_t scaling, model_t* cpgmodel,double events_per_base) {
 
     // std::string contig = hdr->target_name[record->core.tid];
     int ref_start_pos = record->core.pos;
-    int ref_end_pos =  bam_endpos(record);
+    //int ref_end_pos =  bam_endpos(record);
 
     // // Extract the reference sequence for this region
     // int fetched_len = 0;
@@ -629,15 +630,15 @@ scalings_t scaling, model_t* cpgmodel,double events_per_base) {
 
         //fprintf(stderr,"meth score %f\n",methylated_score);
 
-        std::string contig = m_hdr->target_name[record->core.tid];
+        //std::string contig = m_hdr->target_name[record->core.tid];
 
         // Aggregate score
         int start_position = cpg_sites[start_idx] + ref_start_pos;
-        auto iter = site_score_map.find(start_position);
-        if (iter == site_score_map.end()) {
+        auto iter = site_score_map->find(start_position);
+        if (iter == site_score_map->end()) {
             // insert new score into the map
             ScoredSite ss;
-            ss.chromosome = contig;
+            //ss.chromosome = contig;
             ss.start_position = start_position;
             ss.end_position = cpg_sites[end_idx - 1] + ref_start_pos;
             ss.n_cpg = end_idx - start_idx;
@@ -650,7 +651,7 @@ scalings_t scaling, model_t* cpgmodel,double events_per_base) {
 
             // insert into the map
             iter =
-                site_score_map.insert(std::make_pair(start_position, ss)).first;
+                site_score_map->insert(std::make_pair(start_position, ss)).first;
         }
 
         // set strand-specific score
@@ -663,28 +664,5 @@ scalings_t scaling, model_t* cpgmodel,double events_per_base) {
 
     } // for group
 
-    char* qname = bam_get_qname(record);
-
-    #ifdef METH_DEBUG
-    // write all sites for this read
-    for(auto iter = site_score_map.begin(); iter != site_score_map.end(); ++iter) {
-
-        const ScoredSite& ss = iter->second;
-        double sum_ll_m = ss.ll_methylated[0]; //+ ss.ll_methylated[1];
-        double sum_ll_u = ss.ll_unmethylated[0]; //+ ss.ll_unmethylated[1];
-        double diff = sum_ll_m - sum_ll_u;
-
-        // fprintf(stderr, "%s\t%d\t%d\t", ss.chromosome.c_str(), ss.start_position, ss.end_position);
-        // fprintf(stderr, "%s\t%.2lf\t", qname, diff);
-        // fprintf(stderr, "%.2lf\t%.2lf\t", sum_ll_m, sum_ll_u);
-        // fprintf(stderr, "%d\t%d\t%s\n", ss.strands_scored, ss.n_cpg, ss.sequence.c_str());
-
-        printf("%s\t%d\t%d\t", ss.chromosome.c_str(), ss.start_position, ss.end_position);
-        printf("%s\t%.2lf\t", qname, diff);
-        printf("%.2lf\t%.2lf\t", sum_ll_m, sum_ll_u);
-        printf("%d\t%d\t%s\n", ss.strands_scored, ss.n_cpg, ss.sequence.c_str());
-
-    }
-    #endif
 
 }

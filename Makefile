@@ -14,17 +14,17 @@ LDFLAGS += $(LIBS) -lpthread
 SRC = main.c f5c.c events.c nanopolish_read_db.c model.c align.c meth.c hmm.c
 OBJ = $(SRC:.c=.o)
 BINARY = f5c
-DEPS = f5c.h fast5lite.h nanopolish_read_db.h f5cmisc.h error.h matrix.h
+DEPS = config.h  error.h  f5c.h  f5cmisc.h  fast5lite.h  logsum.h  matrix.h  model.h  nanopolish_read_db.h
 
 ifeq ($(cuda),) #if cuda is undefined
 
 else
 	DEPS_CUDA = f5c.h fast5lite.h error.h f5cmisc.cuh
-	SRC_CUDA = f5c.cu align.cu align_single.cu
+	SRC_CUDA = f5c.cu align.cu 
 	OBJ_CUDA = $(SRC_CUDA:.cu=_cuda.o)
 	CC_CUDA = nvcc
 	#CFLAGS_CUDA = -g  -G -Xcompiler -rdynamic  -O2 -std=c++11
-	CFLAGS_CUDA = -g  -O2 -std=c++11 -lineinfo $(CUDA_ARCH) -maxrregcount=32
+	CFLAGS_CUDA = -g  -O2 -std=c++11 -lineinfo $(CUDA_ARCH)
 	#CFLAGS_CUDA = -g  -O2 -std=c++11 -lineinfo -arch=sm_61 -maxrregcount=32
 	LDFLAGS += -L/usr/local/cuda/lib64/ -lcudart -lcudadevrt
 	OBJ += gpucode.o $(OBJ_CUDA)

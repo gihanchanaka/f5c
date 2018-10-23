@@ -4,25 +4,18 @@
 #include <math.h>
 #include <assert.h>
 #include <vector>
+#include "logsum.h"
 
 
 //#define INPUT_DEBUG 1
 #define TRANS_START_TO_CLIP 0.5
 #define TRANS_CLIP_SELF 0.9
-#define p7_LOGSUM_TBL   16000
-#define p7_LOGSUM_SCALE 1000.f
-#define ESL_MAX(a,b)    (((a)>(b))?(a):(b))
-#define ESL_MIN(a,b)    (((a)<(b))?(a):(b))
-#define eslINFINITY     INFINITY
 
 #define TRUE 1
 #define FALSE 0
 
 //contains extracted code from nanopolish hmm and matrix
 
-
-// storage
-float flogsum_lookup[p7_LOGSUM_TBL]; /* p7_LOGSUM_TBL=16000: (A-B) = 0..16 nats, steps of 0.001 */
 
 //todo : can make more efficient using bit encoding
 static inline uint32_t get_rank(char base) {
@@ -59,30 +52,6 @@ static inline uint32_t get_kmer_rank(const char* str, uint32_t k) {
 }
 
 
-enum ProfileStateR9
-{
-    PSR9_KMER_SKIP = 0,
-    PSR9_BAD_EVENT,
-    PSR9_MATCH,
-    PSR9_NUM_STATES = 3,
-    PSR9_PRE_SOFT // intentionally after PS_NUM_STATES
-};
-
-enum HMMMovementType
-{
-    HMT_FROM_SAME_M = 0,
-    HMT_FROM_PREV_M,
-    HMT_FROM_SAME_B,
-    HMT_FROM_PREV_B,
-    HMT_FROM_PREV_K,
-    HMT_FROM_SOFT,
-    HMT_NUM_MOVEMENT_TYPES
-};
-typedef struct { float x[HMT_NUM_MOVEMENT_TYPES]; } HMMUpdateScores;
-
-
-//all the blocks(functions, structures) are added in reverse order. at bottom is the first block called and on top is the latest block called.
-
 static inline float log_normal_pdf(float x, float gp_mean, float gp_stdv,
                                    float gp_log_stdv) {
     /*INCOMPLETE*/
@@ -118,14 +87,45 @@ static inline float log_probability_match_r9(scalings_t scaling,
     // if(models[kmer_rank].level_stdv <0.01 ){
     //  fprintf(stderr,"very small std dev %f\n",models[kmer_rank].level_stdv);
     // }
+#ifdef CACHED_LOG
+    float gp_log_stdv =
+        models[kmer_rank].level_log_stdv + scaling.log_var; 
+#else
     float gp_log_stdv =
         log(models[kmer_rank].level_stdv) + log(scaling.var); 
+#endif
 
     float lp = log_normal_pdf(scaledLevel, gp_mean, gp_stdv, gp_log_stdv);
     return lp;
 }
 
 
+
+//following Code is from Nanopolish HMM
+
+enum ProfileStateR9
+{
+    PSR9_KMER_SKIP = 0,
+    PSR9_BAD_EVENT,
+    PSR9_MATCH,
+    PSR9_NUM_STATES = 3,
+    PSR9_PRE_SOFT // intentionally after PS_NUM_STATES
+};
+
+enum HMMMovementType
+{
+    HMT_FROM_SAME_M = 0,
+    HMT_FROM_PREV_M,
+    HMT_FROM_SAME_B,
+    HMT_FROM_PREV_B,
+    HMT_FROM_PREV_K,
+    HMT_FROM_SOFT,
+    HMT_NUM_MOVEMENT_TYPES
+};
+typedef struct { float x[HMT_NUM_MOVEMENT_TYPES]; } HMMUpdateScores;
+
+
+//all the blocks(functions, structures) are added in reverse order. at bottom is the first block called and on top is the latest block called.
 
 // Allocate a vector with the model probabilities of skipping the remaining
 // events after the alignment of event i
@@ -155,7 +155,7 @@ inline std::vector<float> make_post_flanking(const uint32_t e_start,
         }
 
         for(int i = num_events - 3; i >= 0; --i) {
-            uint32_t event_idx = e_start + (i + 1) * event_stride;
+            //uint32_t event_idx = e_start + (i + 1) * event_stride;
             // post_flank[i] = log(TRANS_CLIP_SELF) +
             //                 log_probability_background(*data.read, event_idx, data.strand) + // emit from background
             //                 post_flank[i + 1]; // this accounts for the transition from start, and to silent pre
@@ -191,7 +191,7 @@ inline std::vector<float> make_pre_flanking(const uint32_t e_start,
 
     // skip the remaining events
     for(size_t i = 2; i < pre_flank.size(); ++i) {
-        uint32_t event_idx = e_start + (i - 1) * event_stride;
+        //uint32_t event_idx = e_start + (i - 1) * event_stride;
         // pre_flank[i] = log(TRANS_CLIP_SELF) + 
         //                log_probability_background(*data.read, event_idx, data.strand) + // emit from background
         //                pre_flank[i - 1]; // this accounts for the transition from the start & to the silent pre
@@ -523,37 +523,7 @@ inline float profile_hmm_fill_generic_r9(const char *m_seq,
     return output.get_end();
 }
 
-inline int p7_FLogsumInit(void)
-{
 
-	  static int firsttime = TRUE;
-	  if (!firsttime) return 1;
-	  firsttime = FALSE;
-
-	  int i;
-	  for (i = 0; i < p7_LOGSUM_TBL; i++) {
-	    flogsum_lookup[i] = log(1. + exp((double) -i / p7_LOGSUM_SCALE));
-	  }
-	  return 1;
-}
-
-inline float p7_FLogsum(float a, float b){
-  int i;
-  for (i = 0; i < p7_LOGSUM_TBL; i++) {
-    flogsum_lookup[i] = log(1. + exp((double) -i / p7_LOGSUM_SCALE));
-  }
-  // extern float flogsum_lookup[p7_LOGSUM_TBL]; /* p7_LOGSUM_TBL=16000: (A-B) = 0..16 nats, steps of 0.001 */
-
-  const float max = ESL_MAX(a, b);
-  const float min = ESL_MIN(a, b);
-
-  //return (min == -eslINFINITY || (max-min) >= 15.7f) ? max : max + log(1.0 + exp(min-max));  /* SRE: While debugging SSE impl. Remember to remove! */
-  
-  return (min == -eslINFINITY || (max-min) >= 15.7f) ? max : max + flogsum_lookup[(int)((max-min)*p7_LOGSUM_SCALE)];
-} 
-
-// commented by hasindu
-//#define ESL_LOG_SUM 1
 
 // Add the log-scaled values a and b using a transform to avoid precision errors
 inline double add_logs(const double a, const double b)

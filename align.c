@@ -4,7 +4,7 @@
 //#define DEBUG_RECALIB_SCALING 1
 //#define DEBUG_ADAPTIVE 1
 
-//contains extracted and modified code from nanopolish
+//Code was adapted from Nanopolish : nanopolish_raw_loader.cpp
 
 //todo : can make more efficient using bit encoding
 static inline uint32_t get_rank(char base) {
@@ -131,8 +131,12 @@ static inline float log_probability_match_r9(scalings_t scaling,
     // if(models[kmer_rank].level_stdv <0.01 ){
     // 	fprintf(stderr,"very small std dev %f\n",models[kmer_rank].level_stdv);
     // }
-    float gp_log_stdv =
-        log(models[kmer_rank].level_stdv + 0); // scaling.log_var = log(1)=0;
+    #ifdef CACHED_LOG
+        float gp_log_stdv = models[kmer_rank].level_log_stdv;
+    #else
+        float gp_log_stdv =
+        log(models[kmer_rank].level_stdv); // scaling.log_var = log(1)=0;
+    #endif
 
     float lp = log_normal_pdf(scaledLevel, gp_mean, gp_stdv, gp_log_stdv);
     return lp;
@@ -439,7 +443,7 @@ int32_t align(AlignedPair* out_2, char* sequence, int32_t sequence_len,
     while (curr_kmer_idx >= 0 && curr_event_idx >= 0) {
         // emit alignment
         //>>>>>>>New Repalcement begin
-        assert(outIndex < n_events * 2);
+        assert(outIndex < (int)(n_events * 2));
         out_2[outIndex].ref_pos = curr_kmer_idx;
         out_2[outIndex].read_pos = curr_event_idx;
         outIndex++;
@@ -515,10 +519,10 @@ int32_t align(AlignedPair* out_2, char* sequence, int32_t sequence_len,
                    out_2[outIndex - 1].ref_pos == int(n_kmers - 1);
     // bool spanned = out.front().ref_pos == 0 && out.back().ref_pos == n_kmers - 1;
     //<<<<<<<<<<<<<New replacement over
-    bool failed = false;
+    //bool failed = false;
     if (avg_log_emission < min_average_log_emission || !spanned ||
         max_gap > max_gap_threshold) {
-        failed = true;
+        //failed = true;
         //>>>>>>>>>>>>>New replacement begin
         outIndex = 0;
         // out.clear();
@@ -741,6 +745,9 @@ bool recalibrate_model(model_t* pore_model, event_table et,
         scallings->scale = scale;
         //scallings->drift=drift;
         scallings->var = var;
+#ifdef CACHED_LOG        
+        scallings->log_var = log(var);
+#endif
 
         recalibrated = true;
 

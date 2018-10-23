@@ -8,8 +8,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include "logsum.h"
 
 //double realtime0 = 0;
+float flogsum_lookup[p7_LOGSUM_TBL]; //todo : get rid of global vars
 
 static struct option long_options[] = {
     {"reads", required_argument, 0, 'r'},          //0
@@ -217,6 +219,10 @@ int main(int argc, char* argv[]) {
 
     core_t* core = init_core(bamfilename, fastafile, fastqfile, opt,realtime0);
 
+    #ifdef ESL_LOG_SUM
+        p7_FLogsumInit();
+    #endif
+
  #ifndef IO_PROC_INTERLEAVE   
     db_t* db = init_db(core);
 
@@ -320,8 +326,35 @@ int main(int argc, char* argv[]) {
     }
 
 #ifdef SECTIONAL_BENCHMARK 
-    fprintf(stderr, "\n\n[%s] Alignment time: %.3f sec",
+    fprintf(stderr, "\n\n[%s] Events time: %.3f sec",
+            __func__, core->event_time);
+    fprintf(stderr, "\n[%s] Alignment time: %.3f sec",
             __func__, core->align_time);
+    #ifdef HAVE_CUDA
+        if (!(core->opt.flag & F5C_DISABLE_CUDA)) {
+            fprintf(stderr, "\n[%s] Alignment kernel only time: %.3f sec",
+                __func__, core->align_kernel_time);
+            fprintf(stderr, "\n[%s] Alignment pre kernel only time: %.3f sec",
+                __func__, core->align_pre_kernel_time);
+            fprintf(stderr, "\n[%s] Alignment core kernel only time: %.3f sec",
+                __func__, core->align_core_kernel_time);
+            fprintf(stderr, "\n[%s] Alignment post kernel only time: %.3f sec",
+                __func__, core->align_post_kernel_time);
+            fprintf(stderr, "\n[%s] Alignment preprocess time: %.3f sec",
+                __func__, core->align_cuda_preprocess);
+            fprintf(stderr, "\n[%s] Alignment malloc time: %.3f sec",
+                __func__, core->align_cuda_malloc);
+            fprintf(stderr, "\n[%s] Alignment data move time: %.3f sec",
+                __func__, core->align_cuda_memcpy);
+            fprintf(stderr, "\n[%s] Alignment post process time: %.3f sec",
+                __func__, core->align_cuda_postprocess);
+        }
+    #endif            
+    fprintf(stderr, "\n[%s] Estimate scaling time: %.3f sec",
+            __func__, core->est_scale_time);    
+    fprintf(stderr, "\n[%s] Call methylation time: %.3f sec",
+            __func__, core->meth_time);    
+
 #endif
 
     free_core(core);
